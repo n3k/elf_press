@@ -9,6 +9,30 @@ mod binary_parse;
 use binary_parse::Primitive;
 
 
+fn u16_swap(x: u16) -> u16 {
+    return (x >> 8) | (x << 8);
+}
+
+fn u32_swap(x: u32) -> u32 {
+    let byte0 = x >> 0  & 0xff;
+    let byte1 = x >> 8  & 0xff;
+    let byte2 = x >> 16 & 0xff;
+    let byte3 = x >> 24 & 0xff;
+    return (byte0 << 24) | (byte1 << 16) | (byte2 << 8) | byte3;
+}
+
+fn u64_swap(x: u64) -> u64 {
+    let byte0 = x >> 0  & 0xff;
+    let byte1 = x >> 8  & 0xff;
+    let byte2 = x >> 16 & 0xff;
+    let byte3 = x >> 24 & 0xff;
+    let byte4 = x >> 32 & 0xff;
+    let byte5 = x >> 40 & 0xff;
+    let byte6 = x >> 48 & 0xff;
+    let byte7 = x >> 56 & 0xff;
+    return (byte0 << 56) | (byte1 << 48) | (byte2 << 40) | (byte3 << 32) | (byte4 << 24) | (byte5 << 16) | (byte6 << 8) | byte7;
+}
+
 fn read_ne_u8(input: &mut &[u8]) -> u8 {
     let (int_bytes, rest) = input.split_at(std::mem::size_of::<u8>());
     *input = rest;
@@ -83,8 +107,21 @@ impl Section {
 const ELF32_CLASS: u8 = 1;
 const ELF64_CLASS: u8 = 2;
 
-const ELFDATA_LSB: u8 = 1;
-const ELFDATA_MSB: u8 = 2;
+#[derive(PartialEq)]
+enum elf_endianess {
+    LE = 1,
+    BE = 2,
+}
+
+impl elf_endianess {
+    pub fn from_u8(n: u8) -> Option<elf_endianess> {
+        match n {
+            1 => Some(elf_endianess::LE),
+            2 => Some(elf_endianess::BE),
+            _ => None
+        }
+    }
+}
 
 enum elf_file_type {
     ET_NONE = 0,        // No file type
@@ -111,12 +148,12 @@ enum elf_file_type {
 
  impl ElfIdent {
 
-    fn is_le(&self) -> bool {
-        return self.encoding == ELFDATA_LSB;
+    fn is_le(&self) -> bool {        
+        return elf_endianess::from_u8(self.encoding).unwrap() == elf_endianess::LE;
     }
 
     fn is_be(&self) -> bool {
-        return self.encoding == ELFDATA_MSB;
+        return elf_endianess::from_u8(self.encoding).unwrap() == elf_endianess::BE;
     }
     
     fn is_32(&self) -> bool {
@@ -526,9 +563,13 @@ struct Elf64_Sym {
 
 unsafe impl Primitive for Elf64_Sym {}
 
-enum elf_module {
-    Elf32(Elf32_Ehdr),
-    Elf64(Elf64_Ehdr)    
+
+pub struct elf_module {
+    // is ELF64
+    pub is_elf64: bool,
+    pub endianess:  elf_endianess,
+    pub entry_point: u64,
+    pub sections: Vec::<Section>,
 }
 
 impl elf_module {
@@ -539,22 +580,44 @@ impl elf_module {
         Ok(contents)
     }
 
-    pub fn get_loadable_sections<P: AsRef<Path>>(filename: P) -> io::Result<Vec::<Section>> {
+    pub fn new<P: AsRef<Path>>(filename: P) -> io::Result<elf_module> {
         
-        let mut contents = elf_module::read_file(filename).unwrap();
+        let contents = elf_module::read_file(filename).unwrap();
         
         let elf_ident: &'_ ElfIdent = binary_parse::from_bytearray(&contents[0..16]).unwrap(); 
         let mut sections = Vec::<Section>::new();
         
+        let mut is_elf64 = false;
+        let mut entry_point: u64 = 0;
+        let endianess = elf_endianess::from_u8(elf_ident.encoding).unwrap();
+
         match elf_ident.file_class {
             ELF32_CLASS => {
             let elf_hdr: &'_ Elf32_Ehdr = binary_parse::from_bytearray(&contents[0..64]).unwrap();
+            entry_point = elf_hdr.e_entry as u64;
+
             for idx in 0..elf_hdr.e_phnum {
                 let offset = (elf_hdr.e_phoff as usize) + (idx as usize) * core::mem::size_of::<Elf32_Phdr>();           
                 let elf_phdr: &'_ Elf32_Phdr = binary_parse::from_bytearray(
                     &contents[offset..offset+core::mem::size_of::<Elf32_Phdr>()]).unwrap();
+                
+                let mut p_type = elf_phdr.p_type;  
+                let mut p_filesz = elf_phdr.p_filesz;
+                let mut p_memsz = elf_phdr.p_memsz;
+                let mut p_offset = elf_phdr.p_offset;
+                let mut p_vaddr = elf_phdr.p_vaddr;
+                let mut p_flags = elf_phdr.p_flags;
     
-                let pt_type = PtSegmentType::from_u32(elf_phdr.p_type);
+                if elf_endianess::BE == endianess {
+                    p_type   = u32_swap(p_type);
+                    p_filesz = u32_swap(p_filesz);
+                    p_memsz  = u32_swap(p_memsz);
+                    p_offset = u32_swap(p_offset);
+                    p_vaddr  = u32_swap(p_vaddr);
+                    p_flags  = u32_swap(p_flags);
+                }
+                    
+                let pt_type = PtSegmentType::from_u32(p_type);
                 
                 //println!("PHeader: {}", elf_phdr);
                 match pt_type {
@@ -596,12 +659,31 @@ impl elf_module {
             },
             ELF64_CLASS => {
                 let elf_hdr: &'_ Elf64_Ehdr = binary_parse::from_bytearray(&contents[0..64]).unwrap();
+                entry_point = elf_hdr.e_entry;
+                is_elf64    = true;
+
                 for idx in 0..elf_hdr.e_phnum {
                     let offset = (elf_hdr.e_phoff as usize) + (idx as usize) * core::mem::size_of::<Elf64_Phdr>();           
                     let elf_phdr: &'_ Elf64_Phdr = binary_parse::from_bytearray(
                         &contents[offset..offset+core::mem::size_of::<Elf64_Phdr>()]).unwrap();
         
-                    let pt_type = PtSegmentType::from_u32(elf_phdr.p_type);
+                    let mut p_type = elf_phdr.p_type;  
+                    let mut p_filesz = elf_phdr.p_filesz;
+                    let mut p_memsz = elf_phdr.p_memsz;
+                    let mut p_offset = elf_phdr.p_offset;
+                    let mut p_vaddr = elf_phdr.p_vaddr;
+                    let mut p_flags = elf_phdr.p_flags;
+        
+                    if elf_endianess::BE == endianess {
+                        p_type   = u32_swap(p_type);
+                        p_filesz = u64_swap(p_filesz);
+                        p_memsz  = u64_swap(p_memsz);
+                        p_offset = u64_swap(p_offset);
+                        p_vaddr  = u64_swap(p_vaddr);
+                        p_flags  = u32_swap(p_flags);
+                    }
+                        
+                    let pt_type = PtSegmentType::from_u32(p_type);
                     
                     match pt_type {
                         Some(typ) => {
@@ -643,7 +725,12 @@ impl elf_module {
             _ => panic!("Invalid ELF Class")
         };
 
-        Ok(sections)
+        Ok(elf_module {
+            is_elf64: is_elf64,
+            endianess: endianess,
+            entry_point: entry_point,
+            sections: sections
+        })
     }
     
     pub fn load_into_vaddr(&self, virtual_addr: u64) -> Option<()> {
@@ -657,8 +744,8 @@ mod tests {
     use super::*;
     #[test]
     fn test_load() {         
-        let sections = elf_module::get_loadable_sections("/home/n3k/Documents/Projects/bicep/test").unwrap();        
-        for s in sections {
+        let elf = elf_module::new("/home/n3k/Documents/Projects/bicep/test").unwrap();        
+        for s in elf.sections {
             println!("{:x} - {:x}", s.virt_addr, s.size());
         }
     }
