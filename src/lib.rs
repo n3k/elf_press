@@ -108,7 +108,7 @@ const ELF32_CLASS: u8 = 1;
 const ELF64_CLASS: u8 = 2;
 
 #[derive(PartialEq)]
-enum elf_endianess {
+pub enum elf_endianess {
     LE = 1,
     BE = 2,
 }
