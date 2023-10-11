@@ -1,3 +1,5 @@
+#![allow(non_camel_case_types)]
+
 use std::path::Path;
 use std::convert::TryInto;
 use std::io;
@@ -31,6 +33,30 @@ fn read_ne_u64(input: &mut &[u8]) -> u64 {
     u64::from_ne_bytes(int_bytes.try_into().unwrap())
 }
 
+fn read_le_u8(input: &mut &[u8]) -> u8 {
+    let (int_bytes, rest) = input.split_at(std::mem::size_of::<u8>());
+    *input = rest;
+    u8::from_le_bytes(int_bytes.try_into().unwrap())
+}
+
+fn read_le_u16(input: &mut &[u8]) -> u16 {
+    let (int_bytes, rest) = input.split_at(std::mem::size_of::<u16>());
+    *input = rest;
+    u16::from_le_bytes(int_bytes.try_into().unwrap())
+}
+
+fn read_le_u32(input: &mut &[u8]) -> u32 {
+    let (int_bytes, rest) = input.split_at(std::mem::size_of::<u32>());
+    *input = rest;
+    u32::from_le_bytes(int_bytes.try_into().unwrap())
+}
+
+fn read_le_u64(input: &mut &[u8]) -> u64 {
+    let (int_bytes, rest) = input.split_at(std::mem::size_of::<u64>());
+    *input = rest;
+    u64::from_le_bytes(int_bytes.try_into().unwrap())
+}
+
 const PF_X: u8 = 1 << 0;
 const PF_W: u8 = 1 << 1;
 const PF_R: u8 = 1 << 2;
@@ -44,6 +70,21 @@ const PF_R: u8 = 1 << 2;
     pub content:        Vec<u8>
 }
 
+impl Section {
+    pub fn size(&self) -> usize {
+        if self.file_size < self.mem_size {
+            self.mem_size
+        } else {
+            self.file_size
+        }
+    }
+}
+
+const ELF32_CLASS: u8 = 1;
+const ELF64_CLASS: u8 = 2;
+
+const ELFDATA_LSB: u8 = 1;
+const ELFDATA_MSB: u8 = 2;
 
 enum elf_file_type {
     ET_NONE = 0,        // No file type
@@ -54,11 +95,10 @@ enum elf_file_type {
     ET_LOPROC = 0xff00, // Beginning of processor-specific codes
     ET_HIPROC = 0xffff  // Processor-specific
  }
- 
+
  #[derive(Default, Copy, Clone)]
  #[repr(packed, C)]
- struct Elf64_Ehdr {
-     //magic: [u8; 16],
+ struct ElfIdent {
      magic: u32,
      file_class: u8,
      encoding: u8,
@@ -66,7 +106,50 @@ enum elf_file_type {
      os_abi: u8,
      abi_version: u8,
      padding: [u8; 6],
-     ident_size: u8,
+     ident_size: u8
+ }
+
+ impl ElfIdent {
+
+    fn is_le(&self) -> bool {
+        return self.encoding == ELFDATA_LSB;
+    }
+
+    fn is_be(&self) -> bool {
+        return self.encoding == ELFDATA_MSB;
+    }
+    
+    fn is_32(&self) -> bool {
+        return self.file_class == ELF32_CLASS;
+    }
+
+    fn is_64(&self) -> bool {
+        return self.file_class == ELF64_CLASS;
+    }
+ }
+
+ impl From<&[u8]> for ElfIdent {
+    fn from(bytes: &[u8]) -> Self {
+        ElfIdent {
+            magic: u32::from_ne_bytes(bytes[0..4].try_into().unwrap()),
+            file_class: bytes[4],
+            encoding: bytes[5],
+            file_version: bytes[6],
+            os_abi: bytes[7],
+            abi_version: bytes[8],
+            padding: [0u8; 6],
+            ident_size: bytes[15],       
+        }
+    }
+ }
+
+ unsafe impl Primitive for ElfIdent {}
+ 
+ #[derive(Default, Copy, Clone)]
+ #[repr(packed, C)]
+ struct Elf64_Ehdr {
+     //magic: [u8; 16],
+     ident: ElfIdent,
      e_type: u16,        // Type of file
      e_machine: u16,     // Required architecture for this file
      e_version: u32,     // Must be equal to 1
@@ -83,6 +166,31 @@ enum elf_file_type {
  }
 
  unsafe impl Primitive for Elf64_Ehdr {}
+
+ #[derive(Default, Copy, Clone)]
+ #[repr(packed, C)]
+ struct Elf32_Ehdr {
+     //magic: [u8; 16],
+     ident: ElfIdent,
+     e_type: u16,        // Type of file
+     e_machine: u16,     // Required architecture for this file
+     e_version: u32,     // Must be equal to 1
+     e_entry: u32,       // Address to jump to in order to start program
+     e_phoff: u32,       // Program header table's file offset, in bytes
+     e_shoff: u32,       // Section header table's file offset, in bytes
+     e_flags: u32,       // Processor-specific flags
+     e_ehsize: u16,      // Size of ELF header, in bytes
+     e_phentsize: u16,   // Size of an entry in the program header table
+     e_phnum: u16,       // Number of entries in the program header table
+     e_shentsize: u16,   // Size of an entry in the section header table
+     e_shnum: u16,       // Number of entries in the section header table
+     e_shstrndx: u16,    // Sect hdr table index of sect name string table
+ }
+
+ unsafe impl Primitive for Elf32_Ehdr {}
+
+
+
 
  impl fmt::Display for Elf64_Ehdr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -108,57 +216,166 @@ enum elf_file_type {
   -> e_shnum: {},
   -> e_shstrndx: {},
 )"#,
-    std::str::from_utf8(&self.magic.to_le_bytes()[1..]).unwrap(),
-    self.file_class,
-    self.encoding,
-    self.file_version,
-    self.os_abi,
-    self.abi_version,
-    self.ident_size,
-    self.e_type,
-    self.e_machine,
-    self.e_version,
-    self.e_entry,
-    self.e_phoff,
-    self.e_shoff,
-    self.e_flags,
-    self.e_ehsize,
-    self.e_phentsize,
-    self.e_phnum,
-    self.e_shentsize,
-    self.e_shnum,
-    self.e_shstrndx
+    std::str::from_utf8(&self.ident.magic.to_le_bytes()[1..]).unwrap(),
+    self.ident.file_class,
+    self.ident.encoding,
+    self.ident.file_version,
+    self.ident.os_abi,
+    self.ident.abi_version,
+    self.ident.ident_size,
+    {self.e_type},
+    {self.e_machine},
+    {self.e_version},
+    {self.e_entry},
+    {self.e_phoff},
+    {self.e_shoff},
+    {self.e_flags},
+    {self.e_ehsize},
+    {self.e_phentsize},
+    {self.e_phnum},
+    {self.e_shentsize},
+    {self.e_shnum},
+    {self.e_shstrndx}
+    )}
+}
+
+
+impl fmt::Display for Elf32_Ehdr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, r#"( 
+  -> magic: {}
+  -> file_class: {}
+  -> encoding: {}
+  -> file_version: {}
+  -> os_abi: {}
+  -> abi_version: {}
+  -> ident_size: {},
+  -> e_type: {},
+  -> e_machine: {},
+  -> e_version: {},
+  -> e_entry: {:#x},
+  -> e_phoff: {:#x},
+  -> e_shoff: {:#x},
+  -> e_flags: {},
+  -> e_ehsize: {:#x},
+  -> e_phentsize: {:#x},
+  -> e_phnum: {},
+  -> e_shentsize: {:#x},
+  -> e_shnum: {},
+  -> e_shstrndx: {},
+)"#,
+    std::str::from_utf8(&self.ident.magic.to_le_bytes()[1..]).unwrap(),
+    self.ident.file_class,
+    self.ident.encoding,
+    self.ident.file_version,
+    self.ident.os_abi,
+    self.ident.abi_version,
+    self.ident.ident_size,
+    {self.e_type},
+    {self.e_machine},
+    {self.e_version},
+    {self.e_entry},
+    {self.e_phoff},
+    {self.e_shoff},
+    {self.e_flags},
+    {self.e_ehsize},
+    {self.e_phentsize},
+    {self.e_phnum},
+    {self.e_shentsize},
+    {self.e_shnum},
+    {self.e_shstrndx}
     )}
 }
 
 impl Elf64_Ehdr {
     fn new(data: &[u8]) -> Self {
         assert!( (data.len() >=  std::mem::size_of::<Elf64_Ehdr>()) );
-        assert_eq!( &data[0..4], [0x7f, 0x45, 0x4c, 0x46], "ELF Magic not found!");
+        assert_eq!( &data[0..5], [0x7f, 0x45, 0x4c, 0x46, 0x02], "ELF64 Magic not found!");
         
-        Elf64_Ehdr {
-            magic: read_ne_u32(&mut &data[0..4]),
-            file_class: data[4],
-            encoding: data[5],
-            file_version: data[6],
-            os_abi: data[7],
-            abi_version: data[8],
-            padding: [0u8; 6],
-            ident_size: data[15],
-            e_type: read_ne_u16(&mut &data[16..18]),
-            e_machine: read_ne_u16(&mut &data[18..20]),
-            e_version: read_ne_u32(&mut &data[20..24]),
-            e_entry: read_ne_u64(&mut &data[24..32]),
-            e_phoff: read_ne_u64(&mut &data[32..40]),
-            e_shoff: read_ne_u64(&mut &data[40..48]),
-            e_flags: read_ne_u32(&mut &data[48..52]),
-            e_ehsize:  read_ne_u16(&mut &data[52..54]),
-            e_phentsize: read_ne_u16(&mut &data[54..56]),
-            e_phnum: read_ne_u16(&mut &data[56..58]),
-            e_shentsize: read_ne_u16(&mut &data[58..60]),
-            e_shnum: read_ne_u16(&mut &data[60..62]),
-            e_shstrndx: read_ne_u16(&mut &data[62..64]),
+        let ident = ElfIdent::from(data);
+
+        if ident.is_le() {
+            Elf64_Ehdr {
+                ident: ident,
+                e_type: read_le_u16(&mut &data[16..18]),
+                e_machine: read_le_u16(&mut &data[18..20]),
+                e_version: read_le_u32(&mut &data[20..24]),
+                e_entry: read_le_u64(&mut &data[24..32]),
+                e_phoff: read_le_u64(&mut &data[32..40]),
+                e_shoff: read_le_u64(&mut &data[40..48]),
+                e_flags: read_le_u32(&mut &data[48..52]),
+                e_ehsize:  read_le_u16(&mut &data[52..54]),
+                e_phentsize: read_le_u16(&mut &data[54..56]),
+                e_phnum: read_le_u16(&mut &data[56..58]),
+                e_shentsize: read_le_u16(&mut &data[58..60]),
+                e_shnum: read_le_u16(&mut &data[60..62]),
+                e_shstrndx: read_le_u16(&mut &data[62..64]),
+            }
+        } else {
+            Elf64_Ehdr {
+                ident: ident,
+                e_type: read_ne_u16(&mut &data[16..18]),
+                e_machine: read_ne_u16(&mut &data[18..20]),
+                e_version: read_ne_u32(&mut &data[20..24]),
+                e_entry: read_ne_u64(&mut &data[24..32]),
+                e_phoff: read_ne_u64(&mut &data[32..40]),
+                e_shoff: read_ne_u64(&mut &data[40..48]),
+                e_flags: read_ne_u32(&mut &data[48..52]),
+                e_ehsize:  read_ne_u16(&mut &data[52..54]),
+                e_phentsize: read_ne_u16(&mut &data[54..56]),
+                e_phnum: read_ne_u16(&mut &data[56..58]),
+                e_shentsize: read_ne_u16(&mut &data[58..60]),
+                e_shnum: read_ne_u16(&mut &data[60..62]),
+                e_shstrndx: read_ne_u16(&mut &data[62..64]),
+            }
         }
+        
+    }
+}
+
+impl Elf32_Ehdr {
+    fn new(data: &[u8]) -> Self {
+        assert!( (data.len() >=  std::mem::size_of::<Elf32_Ehdr>()) );
+        assert_eq!( &data[0..5], [0x7f, 0x45, 0x4c, 0x46, 0x01], "ELF32 Magic not found!");
+        
+        let ident = ElfIdent::from(data);
+
+        if ident.is_le() {
+            Elf32_Ehdr {
+                ident: ident,
+                e_type: read_le_u16(&mut &data[16..18]),
+                e_machine: read_le_u16(&mut &data[18..20]),
+                e_version: read_le_u32(&mut &data[20..24]),
+                e_entry: read_le_u32(&mut &data[24..28]),
+                e_phoff: read_le_u32(&mut &data[28..32]),
+                e_shoff: read_le_u32(&mut &data[32..36]),
+                e_flags: read_le_u32(&mut &data[36..40]),
+                e_ehsize:  read_le_u16(&mut &data[40..42]),
+                e_phentsize: read_le_u16(&mut &data[42..44]),
+                e_phnum: read_le_u16(&mut &data[44..46]),
+                e_shentsize: read_le_u16(&mut &data[46..48]),
+                e_shnum: read_le_u16(&mut &data[48..50]),
+                e_shstrndx: read_le_u16(&mut &data[50..52]),
+            }
+        } else {
+            Elf32_Ehdr {
+                ident: ident,
+                e_type: read_ne_u16(&mut &data[16..18]),
+                e_machine: read_ne_u16(&mut &data[18..20]),
+                e_version: read_ne_u32(&mut &data[20..24]),
+                e_entry: read_ne_u32(&mut &data[24..28]),
+                e_phoff: read_ne_u32(&mut &data[28..32]),
+                e_shoff: read_ne_u32(&mut &data[32..36]),
+                e_flags: read_ne_u32(&mut &data[36..40]),
+                e_ehsize:  read_ne_u16(&mut &data[40..42]),
+                e_phentsize: read_ne_u16(&mut &data[42..44]),
+                e_phnum: read_ne_u16(&mut &data[44..46]),
+                e_shentsize: read_ne_u16(&mut &data[46..48]),
+                e_shnum: read_ne_u16(&mut &data[48..50]),
+                e_shstrndx: read_ne_u16(&mut &data[50..52]),
+            }
+        }
+        
     }
 }
 
@@ -189,6 +406,7 @@ impl Elf64_Ehdr {
     PT_OPENBSD_RANDOMIZE = 0x65a3dbe6, // Fill with random data.
     PT_OPENBSD_WXNEEDED = 0x65a3dbe7,  // Program does W^X violations.
     PT_OPENBSD_BOOTDATA = 0x65a41be6,  // Section for boot arguments.
+    PT_ARM_EXIDX        = 0x70000001, 
   }
 
 impl PtSegmentType {
@@ -213,6 +431,7 @@ impl PtSegmentType {
             0x65a3dbe6 => Some(PtSegmentType::PT_OPENBSD_RANDOMIZE),
             0x65a3dbe7 => Some(PtSegmentType::PT_OPENBSD_WXNEEDED),
             0x65a41be6 => Some(PtSegmentType::PT_OPENBSD_BOOTDATA),
+            0x70000001 => Some(PtSegmentType::PT_ARM_EXIDX),
             _ => None
         }
     }
@@ -233,6 +452,47 @@ struct Elf64_Phdr {
 }
 
 unsafe impl Primitive for Elf64_Phdr {}
+
+
+
+/// Program header for ELF32.
+#[derive(Default, Copy, Clone)]
+#[repr(packed, C)]
+struct Elf32_Phdr {
+    p_type: u32,    // Type of segment
+    p_flags: u32,   // Segment flags
+    p_offset: u32,   // File offset where segment is located, in bytes
+    p_vaddr: u32,   // Virtual address of beginning of segment
+    p_paddr: u32,   // Physical addr of beginning of segment (OS-specific)
+    p_filesz: u32, // Num. of bytes in file image of segment (may be zero)
+    p_memsz: u32,  // Num. of bytes in mem image of segment (may be zero)
+    p_align: u32,  // Segment alignment constraint
+}
+
+unsafe impl Primitive for Elf32_Phdr {}
+
+impl fmt::Display for Elf32_Phdr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, r#"( 
+  -> p_type: {}
+  -> p_flags: {}
+  -> p_offset: {}
+  -> p_vaddr: {}
+  -> p_paddr: {}
+  -> p_filesz: {}
+  -> p_memsz: {}
+  -> p_align: {}
+)"#,
+    {self.p_type},
+    {self.p_flags},
+    {self.p_offset},
+    {self.p_vaddr},
+    {self.p_paddr},
+    {self.p_filesz},
+    {self.p_memsz},
+    {self.p_align}
+    )}
+}
 
  /// Section header for ELF64 - same fields as ELF32, different types.
  #[derive(Default, Copy, Clone)]
@@ -266,9 +526,9 @@ struct Elf64_Sym {
 
 unsafe impl Primitive for Elf64_Sym {}
 
-struct elf_module {
-    elf_hdr: Elf64_Ehdr,
-    //sections: &'t [Section],
+enum elf_module {
+    Elf32(Elf32_Ehdr),
+    Elf64(Elf64_Ehdr)    
 }
 
 impl elf_module {
@@ -282,58 +542,107 @@ impl elf_module {
     pub fn get_loadable_sections<P: AsRef<Path>>(filename: P) -> io::Result<Vec::<Section>> {
         
         let mut contents = elf_module::read_file(filename).unwrap();
-        //let header = Elf64_Ehdr::new(&contents[0..64]);
-        //println!("{}", &header);
         
-        let elf_hdr: &'_ Elf64_Ehdr = binary_parse::from_bytearray(&contents[0..64]).unwrap(); 
-        //println!("{}", elf_hdr);
-        
+        let elf_ident: &'_ ElfIdent = binary_parse::from_bytearray(&contents[0..16]).unwrap(); 
         let mut sections = Vec::<Section>::new();
-
-        for idx in 0..elf_hdr.e_phnum {
-            let offset = (elf_hdr.e_phoff as usize) + (idx as usize) * core::mem::size_of::<Elf64_Phdr>();           
-            let elf_phdr: &'_ Elf64_Phdr = binary_parse::from_bytearray(
-                &contents[offset..offset+core::mem::size_of::<Elf64_Phdr>()]).unwrap();
-
-            let pt_type = PtSegmentType::from_u32(elf_phdr.p_type);
-            
-            match pt_type {
-                Some(typ) => {
-                    //println!("TYPE: {:?}", typ);
-                    match typ {
-                        PtSegmentType::PT_LOAD => {                             
-                            if (elf_phdr.p_filesz > elf_phdr.p_memsz) {
-                                panic!("p_filesz > p_memsz");
-                            }
-                            if (elf_phdr.p_filesz == 0 ) {
-                                panic!("p_filesz = 0");                                
-                            }                                         
-
-                            let mut section_content = Vec::<u8>::with_capacity(elf_phdr.p_filesz as usize);
-                       
-                            section_content.extend_from_slice(
-                                contents.get(
-                                    elf_phdr.p_offset as usize..elf_phdr.p_offset.checked_add(elf_phdr.p_filesz)
-                                    .expect("checked_add failed") as usize)
-                                    .expect("contents.get() failed"));
-
-                            sections.push(
-                                Section {
-                                    file_off: elf_phdr.p_offset as usize,
-                                    virt_addr: elf_phdr.p_vaddr as usize,
-                                    file_size: elf_phdr.p_filesz as usize,
-                                    mem_size: elf_phdr.p_memsz as usize,  
-                                    permissions: elf_phdr.p_flags,
-                                    content: section_content                        
-                            });
-                        },
-                        _ => {}
-                    }
-                },
-                None => panic!("Unknown segment type")
-            }
-        }
         
+        match elf_ident.file_class {
+            ELF32_CLASS => {
+            let elf_hdr: &'_ Elf32_Ehdr = binary_parse::from_bytearray(&contents[0..64]).unwrap();
+            for idx in 0..elf_hdr.e_phnum {
+                let offset = (elf_hdr.e_phoff as usize) + (idx as usize) * core::mem::size_of::<Elf32_Phdr>();           
+                let elf_phdr: &'_ Elf32_Phdr = binary_parse::from_bytearray(
+                    &contents[offset..offset+core::mem::size_of::<Elf32_Phdr>()]).unwrap();
+    
+                let pt_type = PtSegmentType::from_u32(elf_phdr.p_type);
+                
+                //println!("PHeader: {}", elf_phdr);
+                match pt_type {
+                    Some(typ) => {
+                        //println!("TYPE: {:?}", typ);
+                        match typ {
+                            PtSegmentType::PT_LOAD => {                             
+                                // if elf_phdr.p_filesz > elf_phdr.p_memsz {
+                                //     panic!("p_filesz > p_memsz");
+                                // }
+                                if elf_phdr.p_filesz == 0 {
+                                    panic!("p_filesz = 0");                                
+                                }                                         
+    
+                                let mut section_content = Vec::<u8>::with_capacity(elf_phdr.p_filesz as usize);
+                           
+                                section_content.extend_from_slice(
+                                    contents.get(
+                                        elf_phdr.p_offset as usize..elf_phdr.p_offset.checked_add(elf_phdr.p_filesz)
+                                        .expect("checked_add failed") as usize)
+                                        .expect("contents.get() failed"));
+    
+                                sections.push(
+                                    Section {
+                                        file_off: elf_phdr.p_offset as usize,
+                                        virt_addr: elf_phdr.p_vaddr as usize,
+                                        file_size: elf_phdr.p_filesz as usize,
+                                        mem_size: elf_phdr.p_memsz as usize,  
+                                        permissions: elf_phdr.p_flags,
+                                        content: section_content                        
+                                });
+                            },
+                            _ => {}
+                        }
+                    },
+                    None => panic!("Unknown segment type: {}", {elf_phdr.p_type})
+                }
+            }
+            },
+            ELF64_CLASS => {
+                let elf_hdr: &'_ Elf64_Ehdr = binary_parse::from_bytearray(&contents[0..64]).unwrap();
+                for idx in 0..elf_hdr.e_phnum {
+                    let offset = (elf_hdr.e_phoff as usize) + (idx as usize) * core::mem::size_of::<Elf64_Phdr>();           
+                    let elf_phdr: &'_ Elf64_Phdr = binary_parse::from_bytearray(
+                        &contents[offset..offset+core::mem::size_of::<Elf64_Phdr>()]).unwrap();
+        
+                    let pt_type = PtSegmentType::from_u32(elf_phdr.p_type);
+                    
+                    match pt_type {
+                        Some(typ) => {
+                            //println!("TYPE: {:?}", typ);
+                            match typ {
+                                PtSegmentType::PT_LOAD => {                             
+                                    if elf_phdr.p_filesz > elf_phdr.p_memsz {
+                                        panic!("p_filesz > p_memsz");
+                                    }
+                                    if elf_phdr.p_filesz == 0 {
+                                        panic!("p_filesz = 0");                                
+                                    }                                         
+        
+                                    let mut section_content = Vec::<u8>::with_capacity(elf_phdr.p_filesz as usize);
+                               
+                                    section_content.extend_from_slice(
+                                        contents.get(
+                                            elf_phdr.p_offset as usize..elf_phdr.p_offset.checked_add(elf_phdr.p_filesz)
+                                            .expect("checked_add failed") as usize)
+                                            .expect("contents.get() failed"));
+        
+                                    sections.push(
+                                        Section {
+                                            file_off: elf_phdr.p_offset as usize,
+                                            virt_addr: elf_phdr.p_vaddr as usize,
+                                            file_size: elf_phdr.p_filesz as usize,
+                                            mem_size: elf_phdr.p_memsz as usize,  
+                                            permissions: elf_phdr.p_flags,
+                                            content: section_content                        
+                                    });
+                                },
+                                _ => {}
+                            }
+                        },
+                        None => panic!("Unknown segment type")
+                    }
+                }
+            },
+            _ => panic!("Invalid ELF Class")
+        };
+
         Ok(sections)
     }
     
@@ -348,9 +657,9 @@ mod tests {
     use super::*;
     #[test]
     fn test_load() {         
-        let sections = elf_module::get_loadable_sections("input_test\\test_app").unwrap();        
+        let sections = elf_module::get_loadable_sections("/home/n3k/Documents/Projects/bicep/test").unwrap();        
         for s in sections {
-            println!("{:x}", s.virt_addr);
+            println!("{:x} - {:x}", s.virt_addr, s.size());
         }
     }
 }

@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(non_camel_case_types)]
 
 use core::slice::from_raw_parts;
 use core::str::{from_utf8, from_utf8_unchecked};
