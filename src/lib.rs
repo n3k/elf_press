@@ -491,18 +491,17 @@ struct Elf64_Phdr {
 unsafe impl Primitive for Elf64_Phdr {}
 
 
-
 /// Program header for ELF32.
 #[derive(Default, Copy, Clone)]
 #[repr(packed, C)]
 struct Elf32_Phdr {
-    p_type: u32,    // Type of segment
-    p_flags: u32,   // Segment flags
+    p_type: u32,    // Type of segment    
     p_offset: u32,   // File offset where segment is located, in bytes
     p_vaddr: u32,   // Virtual address of beginning of segment
     p_paddr: u32,   // Physical addr of beginning of segment (OS-specific)
     p_filesz: u32, // Num. of bytes in file image of segment (may be zero)
     p_memsz: u32,  // Num. of bytes in mem image of segment (may be zero)
+    p_flags: u32,   // Segment flags
     p_align: u32,  // Segment alignment constraint
 }
 
@@ -511,22 +510,22 @@ unsafe impl Primitive for Elf32_Phdr {}
 impl fmt::Display for Elf32_Phdr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, r#"( 
-  -> p_type: {}
-  -> p_flags: {}
-  -> p_offset: {}
-  -> p_vaddr: {}
-  -> p_paddr: {}
-  -> p_filesz: {}
-  -> p_memsz: {}
-  -> p_align: {}
+  -> p_type: {:#08x}  
+  -> p_offset: {:#08x}
+  -> p_vaddr: {:#08x}
+  -> p_paddr: {:#08x}
+  -> p_filesz: {:#08x}
+  -> p_memsz: {:#08x}
+  -> p_flags: {:#08x}
+  -> p_align: {:#08x}
 )"#,
-    {self.p_type},
-    {self.p_flags},
+    {self.p_type},    
     {self.p_offset},
     {self.p_vaddr},
     {self.p_paddr},
     {self.p_filesz},
     {self.p_memsz},
+    {self.p_flags},
     {self.p_align}
     )}
 }
@@ -597,10 +596,12 @@ impl elf_module {
             entry_point = elf_hdr.e_entry as u64;
 
             for idx in 0..elf_hdr.e_phnum {
-                let offset = (elf_hdr.e_phoff as usize) + (idx as usize) * core::mem::size_of::<Elf32_Phdr>();           
+                let offset = (elf_hdr.e_phoff as usize) + (idx as usize) * core::mem::size_of::<Elf32_Phdr>();  
+                //println!("Offset of Elf32_Phdr: {:#08x}", offset);         
                 let elf_phdr: &'_ Elf32_Phdr = binary_parse::from_bytearray(
                     &contents[offset..offset+core::mem::size_of::<Elf32_Phdr>()]).unwrap();
                 
+                //println!("{}", elf_phdr);
                 let mut p_type = elf_phdr.p_type;  
                 let mut p_filesz = elf_phdr.p_filesz;
                 let mut p_memsz = elf_phdr.p_memsz;
@@ -609,6 +610,7 @@ impl elf_module {
                 let mut p_flags = elf_phdr.p_flags;
     
                 if elf_endianess::BE == endianess {
+                    entry_point = u32_swap(entry_point as u32) as u64;
                     p_type   = u32_swap(p_type);
                     p_filesz = u32_swap(p_filesz);
                     p_memsz  = u32_swap(p_memsz);
@@ -632,21 +634,21 @@ impl elf_module {
                                     panic!("p_filesz = 0");                                
                                 }                                         
     
-                                let mut section_content = Vec::<u8>::with_capacity(elf_phdr.p_filesz as usize);
-                           
+                                let mut section_content = Vec::<u8>::with_capacity(p_filesz as usize);
+                                //println!("Read section from {:#08x} to {:#08x}", {p_offset} , p_offset.checked_add(elf_phdr.p_filesz).unwrap());
                                 section_content.extend_from_slice(
                                     contents.get(
-                                        elf_phdr.p_offset as usize..elf_phdr.p_offset.checked_add(elf_phdr.p_filesz)
+                                        p_offset as usize..p_offset.checked_add(p_filesz)
                                         .expect("checked_add failed") as usize)
                                         .expect("contents.get() failed"));
     
                                 sections.push(
                                     Section {
-                                        file_off: elf_phdr.p_offset as usize,
-                                        virt_addr: elf_phdr.p_vaddr as usize,
-                                        file_size: elf_phdr.p_filesz as usize,
-                                        mem_size: elf_phdr.p_memsz as usize,  
-                                        permissions: elf_phdr.p_flags,
+                                        file_off: p_offset as usize,
+                                        virt_addr: p_vaddr as usize,
+                                        file_size: p_filesz as usize,
+                                        mem_size: p_memsz as usize,  
+                                        permissions: p_flags,
                                         content: section_content                        
                                 });
                             },
@@ -690,28 +692,28 @@ impl elf_module {
                             //println!("TYPE: {:?}", typ);
                             match typ {
                                 PtSegmentType::PT_LOAD => {                             
-                                    if elf_phdr.p_filesz > elf_phdr.p_memsz {
+                                    if p_filesz > p_memsz {
                                         panic!("p_filesz > p_memsz");
                                     }
-                                    if elf_phdr.p_filesz == 0 {
+                                    if p_filesz == 0 {
                                         panic!("p_filesz = 0");                                
                                     }                                         
         
-                                    let mut section_content = Vec::<u8>::with_capacity(elf_phdr.p_filesz as usize);
+                                    let mut section_content = Vec::<u8>::with_capacity(p_filesz as usize);
                                
                                     section_content.extend_from_slice(
                                         contents.get(
-                                            elf_phdr.p_offset as usize..elf_phdr.p_offset.checked_add(elf_phdr.p_filesz)
+                                            p_offset as usize..p_offset.checked_add(p_filesz)
                                             .expect("checked_add failed") as usize)
                                             .expect("contents.get() failed"));
         
                                     sections.push(
                                         Section {
-                                            file_off: elf_phdr.p_offset as usize,
-                                            virt_addr: elf_phdr.p_vaddr as usize,
-                                            file_size: elf_phdr.p_filesz as usize,
-                                            mem_size: elf_phdr.p_memsz as usize,  
-                                            permissions: elf_phdr.p_flags,
+                                            file_off: p_offset as usize,
+                                            virt_addr: p_vaddr as usize,
+                                            file_size: p_filesz as usize,
+                                            mem_size: p_memsz as usize,  
+                                            permissions: p_flags,
                                             content: section_content                        
                                     });
                                 },
