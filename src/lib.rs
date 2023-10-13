@@ -5,7 +5,7 @@ use std::convert::TryInto;
 use std::io;
 use std::fmt;
 
-mod binary_parse;
+pub mod binary_parse;
 use binary_parse::Primitive;
 
 
