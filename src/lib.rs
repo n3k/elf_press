@@ -107,7 +107,7 @@ impl Section {
 const ELF32_CLASS: u8 = 1;
 const ELF64_CLASS: u8 = 2;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub enum elf_endianess {
     LE = 1,
     BE = 2,
