@@ -776,7 +776,8 @@ pub struct elf_module {
     /// A list of loadable segments
     pub segments: Vec::<Segment>,
 
-    ///
+    /// A vector of (name, value, size, Option<SymbolNameString>)
+    /// This only represents the GLOBAL FUNC Symbols of the ELF
     pub global_symbols: Vec::<(u32, u32, u32, Option<String>)>
 }
 
