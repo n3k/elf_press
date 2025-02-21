@@ -1,5 +1,5 @@
 [package]
-name = "relf_parser"
+name = "elf_press"
 version = "0.1.0"
 authors = ["n3k1990 <n3k1990@gmail.com>"]
 edition = "2018"

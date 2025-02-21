@@ -94,12 +94,38 @@ const PF_R: u8 = 1 << 2;
     pub content:        Vec<u8>
 }
 
+#[derive(Debug)]
+pub enum SegmentPemissions {
+    NoPerms,
+    Read,
+    Write,
+    Execute,
+    ReadWrite,
+    ReadExecute,
+    WriteExecute, // Maybe?
+    ReadWriteExecute
+}
+
 impl Segment {
     pub fn size(&self) -> usize {
         if self.file_size < self.mem_size {
             self.mem_size
         } else {
             self.file_size
+        }
+    }
+
+    pub fn permissions(&self) -> SegmentPemissions {
+        match self.permissions {
+            0b000 => SegmentPemissions::NoPerms,
+            0b001 => SegmentPemissions::Execute,
+            0b010 => SegmentPemissions::Write,
+            0b100 => SegmentPemissions::Read,
+            0b110 => SegmentPemissions::ReadWrite,
+            0b011 => SegmentPemissions::WriteExecute,
+            0b101 => SegmentPemissions::ReadExecute,
+            0b111 => SegmentPemissions::ReadWriteExecute,
+            _ => unreachable!("invalid permissions")
         }
     }
 }
@@ -133,7 +159,7 @@ enum elf_file_type {
     ET_HIPROC = 0xffff  // Processor-specific
  }
 
- #[derive(Default, Copy, Clone)]
+ #[derive(Copy, Clone)]
  #[repr(packed, C)]
  struct ElfIdent {
      magic: u32,
@@ -182,7 +208,7 @@ enum elf_file_type {
 
  unsafe impl Primitive for ElfIdent {}
  
- #[derive(Default, Copy, Clone)]
+ #[derive(Copy, Clone)]
  #[repr(packed, C)]
  struct Elf64_Ehdr {
      //magic: [u8; 16],
@@ -204,7 +230,7 @@ enum elf_file_type {
 
  unsafe impl Primitive for Elf64_Ehdr {}
 
- #[derive(Default, Copy, Clone)]
+ #[derive(Copy, Clone)]
  #[repr(packed, C)]
  struct Elf32_Ehdr {
      //magic: [u8; 16],
@@ -478,7 +504,7 @@ impl PtSegmentType {
 
 
 /// Program header for ELF64.
-#[derive(Default, Copy, Clone)]
+#[derive(Copy, Clone)]
 #[repr(packed, C)]
 struct Elf64_Phdr {
     p_type: u32,    // Type of segment
@@ -495,7 +521,7 @@ unsafe impl Primitive for Elf64_Phdr {}
 
 
 /// Program header for ELF32.
-#[derive(Default, Copy, Clone)]
+#[derive(Copy, Clone)]
 #[repr(packed, C)]
 struct Elf32_Phdr {
     p_type: u32,    // Type of segment    
@@ -582,7 +608,7 @@ impl SHType {
 }
 
  /// Section header for ELF64 - same fields as ELF32, different types.
- #[derive(Default, Copy, Clone)]
+ #[derive(Copy, Clone)]
  #[repr(packed, C)]
  struct Elf64_Shdr {
     sh_name: u32,
@@ -600,7 +626,7 @@ impl SHType {
 unsafe impl Primitive for Elf64_Shdr {}
 
 
-#[derive(Default, Copy, Clone)]
+#[derive(Copy, Clone)]
 #[repr(packed, C)]
 struct Elf32_Shdr {
    sh_name: u32,
@@ -646,7 +672,7 @@ unsafe impl Primitive for Elf32_Shdr {}
 
 
 /// Symbol table entries for ELF64.
-#[derive(Default, Copy, Clone)]
+#[derive(Copy, Clone)]
 #[repr(packed, C)]
 struct Elf64_Sym {
     st_name: u32,       // Symbol name (index into string table)
@@ -658,6 +684,18 @@ struct Elf64_Sym {
 }
 
 unsafe impl Primitive for Elf64_Sym {}
+
+impl Elf64_Sym {
+
+    fn get_binding(&self) -> STB {
+        STB::from_u8(self.st_info >> 4)
+    }
+
+    fn get_type(&self) -> STT {
+        STT::from_u8(self.st_info & 0x0F)
+    }
+}
+
 
 
 /// Symbol bindings.
@@ -727,7 +765,7 @@ impl STT {
 }
 
 /// Symbol table entries for ELF32.
-#[derive(Default, Copy, Clone)]
+#[derive(Copy, Clone)]
 #[repr(packed, C)]
 struct Elf32_Sym {
     st_name: u32,     // Symbol name (index into string table)
@@ -778,7 +816,7 @@ pub struct elf_module {
 
     /// A vector of (name, value, size, Option<SymbolNameString>)
     /// This only represents the GLOBAL FUNC Symbols of the ELF
-    pub global_symbols: Vec::<(u32, u32, u32, Option<String>)>
+    pub global_symbols: Vec::<(u32, u64, u64, Option<String>)>
 }
 
 impl elf_module {
@@ -867,11 +905,11 @@ impl elf_module {
     }
 
     /// Returns a list with the GLOBAL symbols of the ELF32
-    fn get_symbols_32(contents: &[u8], endianess: elf_endianess) -> Vec<(u32, u32, u32, Option<String>)> {
+    fn get_symbols_32(contents: &[u8], endianess: elf_endianess) -> Vec<(u32, u64, u64, Option<String>)> {
 
         let elf_hdr: &'_ Elf32_Ehdr = binary_parse::from_bytearray(&contents[0..64]).unwrap();
 
-        let mut symbol_data_array = Vec::<(u32, u32, u32, Option<String>)>::new();
+        let mut symbol_data_array = Vec::<(u32, u64, u64, Option<String>)>::new();
 
         // Walk the section header to find the Symbols and collect information
         for idx in 0..elf_hdr.e_shnum {
@@ -893,7 +931,7 @@ impl elf_module {
                         
                         if elf_sym.get_binding() == STB::GLOBAL && elf_sym.get_type() == STT::FUNC {
                             symbol_data_array.push(
-                                (elf_sym.st_name, elf_sym.st_value, elf_sym.st_size, None)
+                                (elf_sym.st_name, elf_sym.st_value as u64, elf_sym.st_size as u64, None)
                             );                        
                         }                        
                     }
@@ -1015,7 +1053,9 @@ impl elf_module {
                         _ => {}
                     }
                 },
-                None => panic!("Unknown segment type")
+                None => {
+                    // Handle these at some point?
+                }
             }
         }
 
@@ -1023,9 +1063,80 @@ impl elf_module {
     }
 
     
-    /// Returns a list with the GLOBAL symbols of the ELF64
-    fn get_symbols_64(contents: &[u8], endianess: elf_endianess) -> Vec<(u32, u32, u32, Option<String>)> {
-        unimplemented!("Implement get_symbols_64")
+    fn get_symbols_64(contents: &[u8], endianess: elf_endianess) -> Vec<(u32, u64, u64, Option<String>)> {
+        let elf_hdr: &'_ Elf64_Ehdr = binary_parse::from_bytearray(&contents[0..64]).unwrap();
+        let mut symbol_data_array = Vec::<(u32, u64, u64, Option<String>)>::new();
+        
+        let mut strtab_offset = None;
+    
+        // Walk section headers to find symbols and their corresponding string table
+        for idx in 0..elf_hdr.e_shnum {
+            let offset = (elf_hdr.e_shoff as usize) + (idx as usize) * core::mem::size_of::<Elf64_Shdr>();
+            let elf_shdr: &'_ Elf64_Shdr = binary_parse::from_bytearray(
+                &contents[offset..offset+core::mem::size_of::<Elf64_Shdr>()]).unwrap();
+            
+            if endianess == elf_endianess::BE {
+                unimplemented!("implement BE transformations!");
+            }
+    
+            // Check for symbol table sections
+            match SHType::from_u32(elf_shdr.sh_type) {
+                Some(SHType::SYMTAB) | Some(SHType::DYNSYM) => {                      
+                    let num_symbols = elf_shdr.sh_size as usize / core::mem::size_of::<Elf64_Sym>();
+                    let symtab_offset = elf_shdr.sh_offset as usize;
+                    
+                    // Locate string table offset from `sh_link`
+                    let strtab_section_idx = elf_shdr.sh_link as usize;
+                    let strtab_sh_offset = (elf_hdr.e_shoff as usize) + (strtab_section_idx * core::mem::size_of::<Elf64_Shdr>());
+                    let strtab_shdr: &'_ Elf64_Shdr = binary_parse::from_bytearray(
+                        &contents[strtab_sh_offset..strtab_sh_offset+core::mem::size_of::<Elf64_Shdr>()]).unwrap();
+                    
+                    strtab_offset = Some(strtab_shdr.sh_offset as usize);
+                                        
+                    for i in 0..num_symbols {
+                        let offset = symtab_offset + i * core::mem::size_of::<Elf64_Sym>();   
+                        let elf_sym: &'_ Elf64_Sym = binary_parse::from_bytearray(
+                            &contents[offset..offset+core::mem::size_of::<Elf64_Sym>()]).unwrap();  
+                        
+                        if elf_sym.get_binding() == STB::GLOBAL && elf_sym.get_type() == STT::FUNC {
+                            symbol_data_array.push((elf_sym.st_name, elf_sym.st_value, elf_sym.st_size, None));
+                        }                        
+                    }
+                }
+                _ => {}
+            }
+        }
+    
+        // If string table offset was found, resolve symbol names
+        if let Some(strtab_base) = strtab_offset {
+            for i in 0..symbol_data_array.len() {
+                let (name, _value, _size, op_name) = &mut symbol_data_array[i];
+    
+                if *name == 0 {
+                    continue; // Empty symbol name
+                }
+    
+                let offset = strtab_base + *name as usize;
+ 
+                // Ensure we don't read out of bounds
+                if offset >= contents.len() {
+                    continue;
+                }
+    
+                // Find length of null-terminated string
+                let mut end = offset;
+                while end < contents.len() && contents[end] != 0 {
+                    end += 1;
+                }
+    
+                // Try to parse UTF-8 string
+                if let Ok(str_name) = std::str::from_utf8(&contents[offset..end]) {
+                    *op_name = Some(str_name.into());
+                }
+            }
+        }
+    
+        return symbol_data_array;
     }
 
 
@@ -1036,7 +1147,7 @@ impl elf_module {
         let elf_ident: &'_ ElfIdent = binary_parse::from_bytearray(&contents[0..16]).unwrap(); 
         
         let segments: Vec::<Segment>;
-        let global_symbols: Vec::<(u32, u32, u32, Option<String>)>;
+        let global_symbols: Vec::<(u32, u64, u64, Option<String>)>;
 
         let mut is_elf64 = false;
         let mut entry_point: u64 = 0;

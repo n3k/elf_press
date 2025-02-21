@@ -1,11 +1,7 @@
 #![no_std]
 #![allow(non_camel_case_types)]
 
-use core::slice::from_raw_parts;
-use core::str::{from_utf8, from_utf8_unchecked};
-
-
-pub unsafe trait Primitive: Default + Clone + Copy {}
+pub unsafe trait Primitive: Clone + Copy {}
 unsafe impl Primitive for u8 {}
 unsafe impl Primitive for u16 {}
 unsafe impl Primitive for u32 {}
