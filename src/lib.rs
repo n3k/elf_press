@@ -128,6 +128,37 @@ impl Segment {
             _ => unreachable!("invalid permissions")
         }
     }
+
+    pub fn is_executable(&self) -> bool {
+        match self.permissions() {
+            SegmentPemissions::Execute|
+            SegmentPemissions::ReadExecute|
+            SegmentPemissions::WriteExecute|
+            SegmentPemissions::ReadWriteExecute => true,
+
+            _ => false
+        }
+    }
+
+    pub fn is_writable(&self) -> bool {
+        match self.permissions() {
+            SegmentPemissions::Write|
+            SegmentPemissions::WriteExecute|
+            SegmentPemissions::ReadWrite|
+            SegmentPemissions::ReadWriteExecute => true,
+            _ => false
+        }
+    }
+
+    pub fn is_readable(&self) -> bool {
+        match self.permissions() {
+            SegmentPemissions::Read|
+            SegmentPemissions::ReadWrite|
+            SegmentPemissions::ReadExecute|
+            SegmentPemissions::ReadWriteExecute => true,
+            _ => false
+        }
+    }
 }
 
 const ELF32_CLASS: u8 = 1;
